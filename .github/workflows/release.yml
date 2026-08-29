@@ -14,8 +14,6 @@ jobs:
         include:
           - os: windows-latest
             suffix: windows-x64
-          - os: macos-14
-            suffix: macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,12 +25,8 @@ jobs:
       - name: Build executable
         run: python -m PyInstaller --clean --noconfirm cuiqiu_qt.spec
       - name: Package Windows
-        if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path dist/CuiqiuCaptcha -DestinationPath CuiqiuCaptcha-${{ matrix.suffix }}.zip
-      - name: Package macOS
-        if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/CuiqiuCaptcha CuiqiuCaptcha-${{ matrix.suffix }}.zip
       - name: Upload directly to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
