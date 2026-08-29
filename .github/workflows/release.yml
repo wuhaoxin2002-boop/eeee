@@ -33,20 +33,8 @@ jobs:
       - name: Package macOS
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent dist/CuiqiuCaptcha CuiqiuCaptcha-${{ matrix.suffix }}.zip
-      - uses: actions/upload-artifact@v4
+      - name: Upload directly to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: CuiqiuCaptcha-${{ matrix.suffix }}
-          path: CuiqiuCaptcha-${{ matrix.suffix }}.zip
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*.zip
+          files: CuiqiuCaptcha-${{ matrix.suffix }}.zip
           generate_release_notes: true
