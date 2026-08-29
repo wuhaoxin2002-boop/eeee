@@ -39,18 +39,21 @@ class Window(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle(f'邮箱验证码服务 v{APP_VERSION}'); self.setFixedSize(620, 430); self.server = None
         self.log_bridge=LogBridge(); self.log_bridge.message.connect(self._append_log)
-        form = QFormLayout(); self.host=QLineEdit('127.0.0.1'); self.port=QLineEdit('1231'); self.button=QPushButton('启动服务'); self.address=QLabel('服务未启动'); self.logs=QTextEdit(); self.logs.setReadOnly(True)
-        form.addRow('监听地址',self.host); form.addRow('端口',self.port); form.addRow('',self.button); form.addRow('接口地址',self.address); form.addRow('运行日志',self.logs)
+        form = QFormLayout(); self.host=QLineEdit('127.0.0.1'); self.port=QLineEdit('1231'); self.button=QPushButton('启动服务'); self.address=QLabel('服务未启动'); self.copy_button=QPushButton('复制'); self.copy_button.setEnabled(False); self.copy_button.clicked.connect(self.copy_address); self.logs=QTextEdit(); self.logs.setReadOnly(True)
+        address_row=QWidget(); address_layout=QFormLayout(address_row); address_layout.setContentsMargins(0,0,0,0); address_layout.addRow(self.address, self.copy_button)
+        form.addRow('监听地址',self.host); form.addRow('端口',self.port); form.addRow('',self.button); form.addRow('接口地址',address_row); form.addRow('运行日志',self.logs)
         root=QWidget(); root.setLayout(form); self.setCentralWidget(root); self.button.clicked.connect(self.toggle)
     def log(self, text): self.log_bridge.message.emit(str(text))
     def _append_log(self, text):
         self.logs.append(time.strftime('%H:%M:%S ') + text)
         self.logs.ensureCursorVisible()
     def toggle(self):
-        if self.server: self.server.shutdown(); self.server.server_close(); self.server=None; self.button.setText('启动服务'); self.address.setText('服务未启动'); self.log('服务已停止'); return
+        if self.server: self.server.shutdown(); self.server.server_close(); self.server=None; self.button.setText('启动服务'); self.address.setText('服务未启动'); self.copy_button.setEnabled(False); self.log('服务已停止'); return
         try:
-            port=int(self.port.text()); self.server=ApiServer((self.host.text().strip(),port),Handler); self.server.window=self; threading.Thread(target=self.server.serve_forever,daemon=True).start(); self.button.setText('停止服务'); self.address.setText(f'http://{self.host.text().strip()}:{port}/captcha'); self.log(f'服务已启动 v{APP_VERSION}: http://{self.host.text().strip()}:{port}/captcha（进程内模式）')
+            port=int(self.port.text()); self.server=ApiServer((self.host.text().strip(),port),Handler); self.server.window=self; threading.Thread(target=self.server.serve_forever,daemon=True).start(); self.button.setText('停止服务'); self.address.setText(f'http://{self.host.text().strip()}:{port}/captcha'); self.copy_button.setEnabled(True); self.log(f'服务已启动 v{APP_VERSION}: http://{self.host.text().strip()}:{port}/captcha（进程内模式）')
         except Exception as exc: self.server=None; QMessageBox.critical(self,'启动失败',str(exc)); self.log(f'启动失败: {exc}')
+    def copy_address(self):
+        QApplication.clipboard().setText(self.address.text()); self.log('接口地址已复制')
     def closeEvent(self,event):
         if self.server: self.server.shutdown(); self.server.server_close()
         event.accept()
