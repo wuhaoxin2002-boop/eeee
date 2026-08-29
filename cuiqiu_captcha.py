@@ -14,29 +14,19 @@ import ddddocr
 import cv2
 import numpy as np
 import requests
+import threading
 
 BASE = "https://mail-client-api.cuiqiu.com"
 ROOT = Path(__file__).resolve().parent
 COOKIE_FILE = ROOT / ".cuiqiu-cookies"
 IMAGE_FILE = ROOT / "captcha.png"
+_OCR = None
+_OCR_LOCK = threading.Lock()
 
 
-def fetch_latest_code(mail, password):
-    """Run the existing login/mail workflow and return its final code."""
-    import subprocess
-    import sys as _sys
-    import re as _re
-    result = subprocess.run(
-        [_sys.executable, str(Path(__file__).resolve()), mail, password],
-        capture_output=True, text=True, timeout=180,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "请求失败")
-    lines = [line.strip() for line in result.stdout.splitlines()]
-    for line in reversed(lines):
-        if _re.fullmatch(r"\d{6}", line):
-            return line
-    return None
+def fetch_latest_code(mail, password, logger=print):
+    """Run the workflow in-process so packaged apps can stream progress logs."""
+    return main(mail, password, logger)
 
 
 def request(session, url, **kwargs):
@@ -145,6 +135,7 @@ def find_verification_code(value):
 
 
 def recognize_variants(image):
+    global _OCR
     source = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
     variants = [image]
     if source is not None:
@@ -157,12 +148,14 @@ def recognize_variants(image):
             _, binary = cv2.threshold(green, threshold, 255, cv2.THRESH_BINARY)
             variants.append(cv2.imencode('.png', binary)[1].tobytes())
 
-    ocr = ddddocr.DdddOcr(show_ad=False)
     results = []
-    for item in variants:
-        text = ocr.classification(item).strip()
-        if text:
-            results.append(text)
+    with _OCR_LOCK:
+        if _OCR is None:
+            _OCR = ddddocr.DdddOcr(show_ad=False)
+        for item in variants:
+            text = _OCR.classification(item).strip()
+            if text:
+                results.append(text)
     if not results:
         return ""
     # Prefer the most frequent result; ties favor the least transformed source.
@@ -172,9 +165,10 @@ def recognize_variants(image):
     return max(counts, key=lambda value: (counts[value], -results.index(value)))
 
 
-def main():
-    mail = sys.argv[1] if len(sys.argv) > 1 else "l8001@zhr002.com"
-    password = sys.argv[2] if len(sys.argv) > 2 else os.getenv("CUIQIU_PASSWORD")
+def main(mail=None, password=None, logger=print):
+    mail = mail or (sys.argv[1] if len(sys.argv) > 1 else "l8001@zhr002.com")
+    password = password or (sys.argv[2] if len(sys.argv) > 2 else os.getenv("CUIQIU_PASSWORD"))
+    emit = lambda *values: logger(" ".join(str(value) for value in values))
     session = requests.Session()
     if COOKIE_FILE.exists():
         session.headers["Cookie"] = COOKIE_FILE.read_text().strip()
@@ -182,29 +176,27 @@ def main():
     form = {"mail": mail, "language": "zh-CN", "host": "mail.cuiqiu.com",
             "browser_language": "zh-CN", "browser_time_zone": "Asia/Shanghai"}
     route = request(session, f"{BASE}/v1/mail/route/resolve", method="POST", data=form).json()
-    print("route:", json.dumps(route, ensure_ascii=False, indent=2))
+    emit("路由解析完成")
     if not password:
-        print("请提供密码：命令行第二个参数或 CUIQIU_PASSWORD 环境变量")
-        return
+        raise ValueError("请提供密码")
 
     attempt = 0
-    while True:
+    max_attempts = 10
+    while attempt < max_attempts:
         attempt += 1
-        print(f"\n第 {attempt} 次尝试")
+        emit(f"登录验证码：第 {attempt} 次尝试")
         captcha = request(session, f"{BASE}/v1/captcha/get", method="POST", data={k: form[k] for k in form if k != "mail"}).json()
-        print("captcha:", json.dumps(captcha, ensure_ascii=False, indent=2))
+        emit("登录验证码：获取图片成功")
         image_url = f"{BASE}/v1{captcha['data']['image_url']}"
         image = request(session, image_url, headers={"accept": "image/*"}).content
         IMAGE_FILE.write_bytes(image)
         COOKIE_FILE.write_text("; ".join(f"{c.name}={c.value}" for c in session.cookies))
-        print(f"验证码图片已保存：{IMAGE_FILE}")
+        emit("OCR：开始识别")
 
         raw = recognize_variants(image)
         expression = normalize(raw)
         answer = calculate(expression)
-        print("OCR 原文:", repr(raw))
-        print("验证码表达式:", expression or "(未识别)")
-        print("验证码答案:", answer if answer is not None else "(请人工确认)")
+        emit(f"OCR：原文={raw!r}，提交值={answer if answer is not None else (expression or '未识别')}")
 
         captcha_value = str(answer) if answer is not None else expression
         if not captcha_value:
@@ -229,13 +221,13 @@ def main():
                 login = response.json()
             except ValueError:
                 login = {"code": response.status_code, "msg": response.text[:500]}
-        print("login:", json.dumps(login, ensure_ascii=False, indent=2))
+        emit(f"登录接口：code={login.get('code') if isinstance(login, dict) else '未知'} msg={login.get('msg', '') if isinstance(login, dict) else ''}")
         login_data = login.get("data") if isinstance(login, dict) else None
         if (isinstance(login, dict) and login.get("code") == 200) or (
             isinstance(login_data, dict) and login_data.get("access_token")
         ):
             COOKIE_FILE.write_text("; ".join(f"{c.name}={c.value}" for c in session.cookies))
-            print("登录成功")
+            emit("登录成功，开始获取邮件列表")
             token = login_data.get("access_token") if isinstance(login_data, dict) else None
             api_base = route.get("data", {}).get("orange_api_url", BASE).rstrip("/")
             list_form = {
@@ -250,6 +242,7 @@ def main():
             try:
                 messages = request(session, f"{api_base}/v1/message/scroll/list", method="POST", data=list_form, headers=message_headers).json()
                 items = messages.get("data", {}).get("list", []) if isinstance(messages, dict) else []
+                emit(f"邮件列表：收到 {len(items)} 封")
                 items = [item for item in items if any(
                     str(sender.get("address", "")).lower() == "support@tfent.cn"
                     for sender in item.get("from", [])
@@ -257,6 +250,7 @@ def main():
                 items.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
                 code = None
                 for item in items:
+                    emit(f"读取邮件：id={item.get('id', '')}")
                     source_form = {"folder": "INBOX", "id": str(item.get("id", "")), **{k: form[k] for k in ("language", "host", "browser_language", "browser_time_zone")}}
                     try:
                         source = request(session, f"{api_base}/v1/message/source", method="POST", data=source_form, headers=message_headers).json()
@@ -265,11 +259,12 @@ def main():
                         continue
                     if code:
                         break
-                print(code or "未找到")
+                emit(f"提取结果：{code or '未找到'}")
+                return code
             except requests.HTTPError as error:
-                print("message_list 请求失败:", error.response.text[:1000])
-            return
-        print("登录失败，重新获取验证码重试…")
+                raise RuntimeError(f"邮件列表请求失败: {error.response.text[:500]}") from error
+        emit("登录验证码校验失败，重新获取")
+    raise RuntimeError(f"登录验证码连续 {max_attempts} 次识别失败")
 
 
 if __name__ == "__main__":

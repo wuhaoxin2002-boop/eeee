@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-import json, threading
+import json, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from PySide6.QtWidgets import QApplication, QFormLayout, QLineEdit, QMainWindow, QPushButton, QLabel, QTextEdit, QWidget, QMessageBox
+from PySide6.QtCore import QObject, Signal
 import cuiqiu_captcha as api
+
+class LogBridge(QObject):
+    message = Signal(str)
 
 class ApiServer(ThreadingHTTPServer):
     allow_reuse_address = True
@@ -19,21 +23,27 @@ class Handler(BaseHTTPRequestHandler):
     def handle_request(self, query):
         mail, password = query.get('mail', [''])[0].strip(), query.get('password', [''])[0]
         if not mail or not password: return self.send_json(400, {'error': 'mail and password are required'})
-        self.server.window.log(f'收到请求 mail={mail}')
+        request_id = uuid.uuid4().hex[:8]; started = time.monotonic()
+        log = lambda text: self.server.window.log(f'[{request_id}] {text}')
+        log(f'收到请求 mail={mail}')
         try:
-            code = api.fetch_latest_code(mail, password); self.send_json(200, {'code': code, 'found': bool(code)})
-            self.server.window.log(f'请求完成 code={code or "未找到"}')
-        except Exception as exc: self.send_json(500, {'error': str(exc)}); self.server.window.log(f'请求失败: {exc}')
+            code = api.fetch_latest_code(mail, password, log); self.send_json(200, {'code': code, 'found': bool(code)})
+            log(f'请求完成 code={code or "未找到"} 耗时={time.monotonic()-started:.1f}s')
+        except Exception as exc: self.send_json(500, {'error': str(exc)}); log(f'请求失败: {exc} 耗时={time.monotonic()-started:.1f}s')
     def send_json(self, status, value):
         body = json.dumps(value, ensure_ascii=False).encode(); self.send_response(status); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
 
 class Window(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle('邮箱验证码服务'); self.setFixedSize(620, 430); self.server = None
+        self.log_bridge=LogBridge(); self.log_bridge.message.connect(self._append_log)
         form = QFormLayout(); self.host=QLineEdit('127.0.0.1'); self.port=QLineEdit('1231'); self.button=QPushButton('启动服务'); self.address=QLabel('服务未启动'); self.logs=QTextEdit(); self.logs.setReadOnly(True)
         form.addRow('监听地址',self.host); form.addRow('端口',self.port); form.addRow('',self.button); form.addRow('接口地址',self.address); form.addRow('运行日志',self.logs)
         root=QWidget(); root.setLayout(form); self.setCentralWidget(root); self.button.clicked.connect(self.toggle)
-    def log(self, text): self.logs.append(text)
+    def log(self, text): self.log_bridge.message.emit(str(text))
+    def _append_log(self, text):
+        self.logs.append(time.strftime('%H:%M:%S ') + text)
+        self.logs.ensureCursorVisible()
     def toggle(self):
         if self.server: self.server.shutdown(); self.server.server_close(); self.server=None; self.button.setText('启动服务'); self.address.setText('服务未启动'); self.log('服务已停止'); return
         try:
