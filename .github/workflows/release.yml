@@ -29,7 +29,7 @@ jobs:
       - name: Package Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/CuiqiuCaptcha -DestinationPath CuiqiuCaptcha-${{ matrix.suffix }}.zip
+        run: Compress-Archive -Path dist/CuiqiuCaptcha.exe -DestinationPath CuiqiuCaptcha-${{ matrix.suffix }}.zip
       - name: Package macOS
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent dist/CuiqiuCaptcha CuiqiuCaptcha-${{ matrix.suffix }}.zip
