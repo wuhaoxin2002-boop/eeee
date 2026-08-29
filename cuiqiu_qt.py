@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, threading, time, uuid
+import json, threading, time, uuid, re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from PySide6.QtWidgets import QApplication, QFormLayout, QLineEdit, QMainWindow, QPushButton, QLabel, QTextEdit, QWidget, QMessageBox
@@ -50,7 +50,11 @@ class Window(QMainWindow):
     def toggle(self):
         if self.server: self.server.shutdown(); self.server.server_close(); self.server=None; self.button.setText('启动服务'); self.address.setText('服务未启动'); self.copy_button.setEnabled(False); self.log('服务已停止'); return
         try:
-            port=int(self.port.text()); self.server=ApiServer((self.host.text().strip(),port),Handler); self.server.window=self; threading.Thread(target=self.server.serve_forever,daemon=True).start(); self.button.setText('停止服务'); self.address.setText(f'http://{self.host.text().strip()}:{port}/captcha'); self.copy_button.setEnabled(True); self.log(f'服务已启动 v{APP_VERSION}: http://{self.host.text().strip()}:{port}/captcha（进程内模式）')
+            host=self.host.text().strip(); port=int(self.port.text())
+            if not host or not (host == 'localhost' or re.fullmatch(r'(?:\d{1,3}\.){3}\d{1,3}', host)):
+                raise ValueError('监听地址格式错误，例如 127.0.0.1')
+            if not 1 <= port <= 65535: raise ValueError('端口范围必须是 1-65535')
+            self.server=ApiServer((host,port),Handler); self.server.window=self; threading.Thread(target=self.server.serve_forever,daemon=True).start(); self.button.setText('停止服务'); self.address.setText(f'http://{host}:{port}/captcha'); self.copy_button.setEnabled(True); self.log(f'服务已启动 v{APP_VERSION}: http://{host}:{port}/captcha（进程内模式）')
         except Exception as exc: self.server=None; QMessageBox.critical(self,'启动失败',str(exc)); self.log(f'启动失败: {exc}')
     def copy_address(self):
         QApplication.clipboard().setText(self.address.text()); self.log('接口地址已复制')
