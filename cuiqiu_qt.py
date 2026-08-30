@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QFormLayout, QLineEdit, QMainWindow,
 from PySide6.QtCore import QObject, Signal
 import cuiqiu_captcha as api
 
-APP_VERSION = '1.0.8'
+APP_VERSION = '1.0.11'
 
 class LogBridge(QObject):
     message = Signal(str)
